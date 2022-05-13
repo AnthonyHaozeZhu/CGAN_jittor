@@ -6,7 +6,6 @@
 @Date ：2022/5/11 09:26
 """
 
-# from pickletools import optimize
 import numpy as np
 import jittor
 import jittor.nn as nn
@@ -39,7 +38,7 @@ class Generator(nn.Module):
         self.tanh = nn.Tanh()
 
     def execute(self, noise, lab):
-        x = jittor.concat((self.embedding(lab), noise), dim=1)
+        x = jittor.contrib.concat((self.embedding(lab), noise), dim=1)
         x = self.linear1(x)
         x = self.linear2(self.relu(x))
         x = self.linear3(self.relu(self.batch_normal1(x)))
@@ -64,7 +63,7 @@ class Discriminator(nn.Module):
 
     def execute(self, img, lab):
         img = img.view((img.shape[0], (- 1)))
-        x = jittor.concat((img, self.embedding(lab)), dim=1)
+        x = jittor.contrib.concat((img, self.embedding(lab)), dim=1)
         x = self.linear1(x)
         x = self.linear2(self.relu(x))
         x = self.linear3(self.drop_out(self.relu(x)))
@@ -107,12 +106,12 @@ def save_image(img, path, nrow=10, padding=5):
         img_ = []
         for j in range(nrow):
             img_.append(img[i * nrow + j])
-            img_.append(np.zeros((C,W,padding)))
+            img_.append(np.zeros((C, W, padding)))
         img_all.append(np.concatenate(img_, 2))
-        img_all.append(np.zeros((C,padding, img_all[0].shape[2])))
+        img_all.append(np.zeros((C, padding, img_all[0].shape[2])))
     img = np.concatenate(img_all, 1)
-    img = np.concatenate([np.zeros((C,padding, img.shape[2])), img], 1)
-    img = np.concatenate([np.zeros((C,img.shape[1] ,padding)), img], 2)
+    img = np.concatenate([np.zeros((C, padding, img.shape[2])), img], 1)
+    img = np.concatenate([np.zeros((C, img.shape[1] ,padding)), img], 2)
     min_ = img.min()
     max_ = img.max()
     img = (img - min_) / (max_ - min_) * 255
@@ -123,17 +122,7 @@ def save_image(img, path, nrow=10, padding=5):
         img = img[: , : , 0]
     Image.fromarray(np.uint8(img)).save(path)
 
-
-def sample_image(n_row, batches_done, path='./'):
-    # 随机采样输入并保存生成的图片
-    z = jittor.array(np.random.normal(0, 1, (n_row ** 2, opt.latent_dim))).float32().stop_grad()
-    labels = jittor.array(np.array([num for _ in range(n_row) for num in range(n_row)])).float32().stop_grad()
-    gen_imgs = generator(z, labels)
-    save_image(gen_imgs.numpy(), path+"%d.png" % batches_done, nrow=n_row)
-
-
 def train(args, train_loader):
-    
     for i in range(args.epochs):
         train_tqdm = tqdm(enumerate(train_loader), desc="Epoch " + str(i))
         for _, (data, target) in train_tqdm:
@@ -159,18 +148,23 @@ def train(args, train_loader):
 
             predict_real = discriminator(real_imgs, labels)
             loss2 = adversarial_loss(predict_real, valid)
-            predict_fake = discriminator(fake_imgs, fake)
+            predict_fake = discriminator(fake_imgs.stop_grad(), fake_labels)
             loss3 = adversarial_loss(predict_fake, fake)
             loss = (loss3 + loss2) / 2
+            loss.sync()
 
-            optimizer_D.step(loss) 
-       
+            optimizer_D.step(loss)
         logger.info("[Epoch {}/{}] [D loss: {}] [G loss: {}]".format(i, args.epochs, loss.data, loss1.data))
         
         if i % 10 == 0:
+            logger.info("Save example gen-image and model")
             generator.save("saved_models/generator_last.pkl")
             discriminator.save("saved_models/discriminator_last.pkl")
-            sample_image(n_row=10, batches_done=i, path='./example/')
+            n_row = 10
+            batches_done=i
+            labels_temp = jittor.array(np.array([num for _ in range(n_row) for num in range(n_row)])).float32().stop_grad()
+            gen_imgs = generator(jittor.array(np.random.normal(0, 1, (n_row ** 2, opt.latent_dim))).float32().stop_grad(), labels_temp)
+            save_image(gen_imgs.numpy(), "./example/%d.png" % batches_done, nrow=n_row)
 
 
 if __name__ == "__main__":
@@ -178,8 +172,6 @@ if __name__ == "__main__":
     parser.add_argument('--epochs', type=int, default=100, help='number of epochs of training')
     parser.add_argument('--batch_size', type=int, default=64, help='size of the batches')
     parser.add_argument('--lr', type=float, default=0.0002, help='adam: learning rate')
-    # parser.add_argument('--b1', type=float, default=0.5, help='adam: decay of first order momentum of gradient')
-    # parser.add_argument('--b2', type=float, default=0.999, help='adam: decay of first order momentum of gradient')
     parser.add_argument('--latent_dim', type=int, default=100, help='dimensionality of the latent space')
     parser.add_argument('--n_classes', type=int, default=10, help='number of classes for dataset')
     parser.add_argument('--img_size', type=int, default=32, help='size of each image dimension')
@@ -189,6 +181,10 @@ if __name__ == "__main__":
 
     if opt.device == 'GPU':
         jittor.flags.use_cuda = 1
+
+    os.makedirs("example", exist_ok=True)
+    os.makedirs("log", exist_ok=True)
+    os.makedirs("saved_models", exist_ok=True)
 
     number = '18713012939'
     z = jittor.array(np.random.normal(0, 1, (len(number), opt.latent_dim))).float32().stop_grad()
@@ -204,8 +200,8 @@ if __name__ == "__main__":
     generator = Generator(opt)
     discriminator = Discriminator(opt)
 
-    optimizer_G = nn.Adam(generator.parameters(), lr=opt.lr)
-    optimizer_D = nn.Adam(discriminator.parameters(), lr=opt.lr)
+    optimizer_G = nn.Adam(generator.parameters(), lr=opt.lr, betas=(0.5, 0.999))
+    optimizer_D = nn.Adam(discriminator.parameters(), lr=opt.lr, betas=(0.5, 0.999))
 
     adversarial_loss = jittor.nn.MSELoss()
 
