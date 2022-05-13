@@ -2,4 +2,5 @@ MNIST
 *.pptx
 .DS_Store
 .idea
-
+log
+saved_models
