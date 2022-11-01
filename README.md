@@ -1,3 +1,5 @@
+$\color{red}{NKU同学参考前务必阅读我主页readme中的内容}$
+
 # Conditional GAN
 本项目利用使用清华大学开源代码框架Jittor利用主流的手写数字数据集MNIST实现了Conditional GAN网络，目标是用计算机生成手写数字。
 
